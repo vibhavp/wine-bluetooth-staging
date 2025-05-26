@@ -802,6 +802,41 @@ static void bluez_device_prop_from_dict_entry( const char *prop_name, DBusMessag
     }
 }
 
+static void bluez_gatt_service_props_from_dict_entry( const char *prop_name, DBusMessageIter *variant,
+                                                      struct winebluetooth_watcher_event_gatt_service_added *service )
+{
+    TRACE_( dbus )( "(%s, %p, %p)\n", debugstr_a( prop_name ), variant, service );
+
+    if (!strcmp( prop_name, "Device" )
+        && p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_OBJECT_PATH )
+    {
+        const char *device_path;
+        struct unix_name *device_name;
+
+        p_dbus_message_iter_get_basic( variant, &device_path );
+        device_name = unix_name_get_or_create( device_path );
+        service->device.handle = (UINT_PTR)device_name;
+    }
+    else if (!strcmp( prop_name, "Handle" )
+             && p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_UINT16)
+        p_dbus_message_iter_get_basic( variant, &service->attr_handle );
+    else if (!strcmp( prop_name, "Primary" )
+             && p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_BOOLEAN)
+    {
+        dbus_bool_t primary;
+        p_dbus_message_iter_get_basic( variant, &primary );
+        service->is_primary = !!primary;
+    }
+    else if (!strcmp( prop_name, "UUID" )
+             && p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_STRING)
+    {
+        const char *uuid_str;
+        p_dbus_message_iter_get_basic( variant, &uuid_str );
+        if (!parse_uuid( &service->uuid, uuid_str ))
+            ERR_(dbus)("Failed to parse UUID %s\n", debugstr_a( uuid_str ));
+    }
+}
+
 static NTSTATUS bluez_adapter_get_props_async( void *connection, const char *radio_object_path,
                                                DBusPendingCall **call )
 {
@@ -1620,6 +1655,43 @@ static DBusHandlerResult bluez_filter( DBusConnection *conn, DBusMessage *msg, v
                     }
                 }
             }
+            else if (!strcmp( iface_name, BLUEZ_INTERFACE_GATT_SERVICE ))
+            {
+                struct winebluetooth_watcher_event_gatt_service_added service_added = {0};
+                union winebluetooth_watcher_event_data event = {0};
+                struct unix_name *service_name;
+                DBusMessageIter props_iter, variant;
+                const char *prop_name;
+
+                service_name = unix_name_get_or_create( object_path );
+                service_added.service.handle = (UINT_PTR)service_name;
+                if (!service_name)
+                {
+                    ERR( "Failed to allocate memory for GATT service path %s\n", debugstr_a( object_path ) );
+                    break;
+                }
+                p_dbus_message_iter_next( &iface_entry );
+                p_dbus_message_iter_recurse( &iface_entry, &props_iter );
+
+                while ((prop_name = bluez_next_dict_entry( &props_iter, &variant )))
+                    bluez_gatt_service_props_from_dict_entry( prop_name, &variant, &service_added );
+                if (!service_added.device.handle)
+                {
+                    unix_name_free( service_name );
+                    ERR( "Could not find the associated device for the GATT service %s\n", debugstr_a( object_path ) );
+                    break;
+                }
+
+                event.gatt_service_added = service_added;
+                TRACE( "New Bluez org.bluez.GattService1 object added at %s: %p\n", debugstr_a( object_path ),
+                       service_name );
+                if (!bluez_event_list_queue_new_event( event_list, BLUETOOTH_WATCHER_EVENT_TYPE_DEVICE_GATT_SERVICE_ADDED,
+                                                       event ))
+                {
+                    unix_name_free( service_name );
+                    unix_name_free( (struct unix_name *)service_added.device.handle );
+                }
+            }
             p_dbus_message_iter_next( &ifaces_iter );
         }
     }
@@ -2159,7 +2231,7 @@ static NTSTATUS bluez_build_initial_device_lists( DBusMessage *reply, struct lis
             }
             else if (!strcmp( iface, BLUEZ_INTERFACE_GATT_SERVICE ))
             {
-                struct unix_name *service_name, *device_name = NULL;
+                struct unix_name *service_name;
                 struct bluez_init_entry *init_device;
                 DBusMessageIter variant;
                 const char *prop_name;
@@ -2180,44 +2252,8 @@ static NTSTATUS bluez_build_initial_device_lists( DBusMessage *reply, struct lis
                 init_device->object.service.service.handle = (UINT_PTR)service_name;
 
                 while ((prop_name = bluez_next_dict_entry( &prop_iter, &variant )))
-                {
-                    if (!strcmp( prop_name, "Device" )
-                        && p_dbus_message_iter_get_arg_type( &variant ) == DBUS_TYPE_OBJECT_PATH )
-                    {
-                        const char *device_path;
-
-                        p_dbus_message_iter_get_basic( &variant, &device_path );
-                        device_name = unix_name_get_or_create( device_path );
-                        if (!device_name)
-                        {
-                            unix_name_free( service_name );
-                            free( init_device );
-                            ERR( "Failed to allocate memory for device path %s\n", debugstr_a( device_path ));
-                            status = STATUS_NO_MEMORY;
-                            goto done;
-                        }
-                        init_device->object.service.device.handle = (UINT_PTR)device_name;
-                    }
-                    else if (!strcmp( prop_name, "Handle" )
-                             && p_dbus_message_iter_get_arg_type( &variant ) == DBUS_TYPE_UINT16)
-                        p_dbus_message_iter_get_basic( &variant, &init_device->object.service.attr_handle );
-                    else if (!strcmp( prop_name, "Primary" )
-                             && p_dbus_message_iter_get_arg_type( &variant ) == DBUS_TYPE_BOOLEAN)
-                    {
-                        dbus_bool_t primary;
-                        p_dbus_message_iter_get_basic( &variant, &primary );
-                        init_device->object.service.is_primary = !!primary;
-                    }
-                    else if (!strcmp( prop_name, "UUID" )
-                             && p_dbus_message_iter_get_arg_type( &variant ) == DBUS_TYPE_STRING)
-                    {
-                        const char *uuid_str;
-                        p_dbus_message_iter_get_basic( &variant, &uuid_str );
-                        if (!parse_uuid( &init_device->object.service.uuid, uuid_str ))
-                            ERR("Failed to parse UUID %s for GATT service %s\n", debugstr_a( uuid_str ), path );
-                    }
-                }
-                if (!device_name)
+                    bluez_gatt_service_props_from_dict_entry( prop_name, &variant, &init_device->object.service );
+                if (!init_device->object.service.device.handle)
                 {
                     unix_name_free( service_name );
                     free( init_device );
