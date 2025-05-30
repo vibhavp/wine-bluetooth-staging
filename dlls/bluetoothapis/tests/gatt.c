@@ -37,7 +37,18 @@
 
 #include <wine/test.h>
 
-static void test_for_all_le_devices( int line, void (*func)( HANDLE, void * ), void *data )
+static void le_to_uuid( const BTH_LE_UUID *le_uuid, GUID *uuid )
+{
+    if (le_uuid->IsShortUuid)
+    {
+        *uuid = BTH_LE_ATT_BLUETOOTH_BASE_GUID;
+        uuid->Data1 = le_uuid->Value.ShortUuid;
+    }
+    else
+        *uuid = le_uuid->Value.LongUuid;
+}
+
+static void test_for_all_le_devices( int line, void (*func)( HANDLE, const WCHAR *, void * ), void *data )
 {
     char buffer[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + MAX_PATH * sizeof( WCHAR )];
     SP_DEVICE_INTERFACE_DETAIL_DATA_W *iface_detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)buffer;
@@ -75,7 +86,7 @@ static void test_for_all_le_devices( int line, void (*func)( HANDLE, void * ), v
                               FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL );
         winetest_push_context( "device %lu", n++ );
         trace( "Address: %s\n", debugstr_w( addr_str ) );
-        func( device, data );
+        func( device, addr_str, data );
         winetest_pop_context();
         CloseHandle( device );
         found = TRUE;
@@ -107,7 +118,69 @@ static const char *debugstr_BTH_LE_GATT_CHARACTERISTIC( const BTH_LE_GATT_CHARAC
                              chrc->IsIndicatable, chrc->HasExtendedProperties );
 }
 
-static void test_service_BluetoothGATTGetCharacteristics( HANDLE device, BTH_LE_GATT_SERVICE *service )
+static void test_service_BluetoothGATTGetCharacteristics( const BTH_LE_GATT_CHARACTERISTIC *chars, USHORT len, HANDLE service )
+{
+    HRESULT ret;
+    USHORT actual = 0, i, match = 0;
+    BTH_LE_GATT_CHARACTERISTIC *chars2;
+
+    ret = BluetoothGATTGetCharacteristics( service, NULL, 0, NULL, &actual, 0 );
+    todo_wine ok( ret == HRESULT_FROM_WIN32( ERROR_MORE_DATA ), "got ret %#lx\n", ret );
+    if (!actual)
+        return;
+
+    actual = len;
+    chars2 = calloc( actual, sizeof( *chars2 ) );
+    ret = BluetoothGATTGetCharacteristics( service, NULL, actual, chars2, &actual, 0 );
+    ok( ret == S_OK, "BluetoothGATTGetCharacteristics failed: %#lx\n", ret );
+    ok( actual == len, "%u != %u\n", actual, len );
+
+     /* Characteristics retrieved using the device and GATT service handle should match. */
+    for (i = 0; i < actual; i++)
+    {
+        const BTH_LE_GATT_CHARACTERISTIC *chrc1 = &chars[i];
+        USHORT j;
+
+        winetest_push_context( "chars[%u]", i );
+        for (j = 0; j < actual; j++)
+        {
+            const BTH_LE_GATT_CHARACTERISTIC *chrc2 = &chars2[j];
+
+            if (IsBthLEUuidMatch( chrc1->CharacteristicUuid, chrc2->CharacteristicUuid )
+                && chrc1->ServiceHandle == chrc2->ServiceHandle
+                && chrc1->AttributeHandle == chrc2->AttributeHandle)
+            {
+                winetest_push_context( "chars2[%u]", j );
+                match++;
+                ok( chrc1->ServiceHandle == chrc2->ServiceHandle, "%#x != %#x\n", chrc1->ServiceHandle,
+                    chrc2->ServiceHandle );
+                ok( chrc1->AttributeHandle == chrc2->AttributeHandle, "%#x != %#x\n", chrc1->AttributeHandle,
+                    chrc2->AttributeHandle );
+                ok( chrc1->CharacteristicValueHandle == chrc2->CharacteristicValueHandle, "%#x != %#x\n",
+                    chrc1->CharacteristicValueHandle, chrc2->CharacteristicValueHandle );
+
+#define TEST_BOOL(field) ok( chrc1->field == chrc2->field, "%d != %d\n", chrc1->field, chrc2->field )
+                TEST_BOOL(IsBroadcastable);
+                TEST_BOOL(IsReadable);
+                TEST_BOOL(IsWritable);
+                TEST_BOOL(IsWritableWithoutResponse);
+                TEST_BOOL(IsSignedWritable);
+                TEST_BOOL(IsNotifiable);
+                TEST_BOOL(IsIndicatable);
+                TEST_BOOL(HasExtendedProperties);
+#undef TEST_BOOL
+                winetest_pop_context();
+                break;
+            }
+        }
+        winetest_pop_context();
+    }
+
+    ok( actual == match, "%u != %u\n", actual, match );
+    free( chars2 );
+}
+
+static void test_BluetoothGATTGetCharacteristics( HANDLE device, HANDLE service, BTH_LE_GATT_SERVICE *service_info )
 {
     HRESULT ret;
     USHORT actual = 0, actual2 = 0, i;
@@ -116,24 +189,89 @@ static void test_service_BluetoothGATTGetCharacteristics( HANDLE device, BTH_LE_
     ret = BluetoothGATTGetCharacteristics( device, service, 0, &dummy, &actual, 0 );
     ok( ret == E_INVALIDARG, "got ret %#lx\n", ret );
 
-    ret = BluetoothGATTGetCharacteristics( device, service, 0, NULL, &actual, 0 );
+    ret = BluetoothGATTGetCharacteristics( device, service_info, 0, NULL, &actual, 0 );
     ok( ret == HRESULT_FROM_WIN32( ERROR_MORE_DATA ), "got ret %#lx\n", ret );
 
-    ret = BluetoothGATTGetCharacteristics( device, service, actual, NULL, &actual2, 0 );
+    ret = BluetoothGATTGetCharacteristics( device, service_info, actual, NULL, &actual2, 0 );
     ok( ret == HRESULT_FROM_WIN32( ERROR_MORE_DATA ), "got ret %#lx\n", ret );
     ok( actual == actual2, "%u != %u\n", actual, actual2 );
 
     buf = calloc( actual, sizeof( *buf ) );
-    ret = BluetoothGATTGetCharacteristics( device, service, actual, buf, &actual, 0 );
+    ret = BluetoothGATTGetCharacteristics( device, service_info, actual, buf, &actual, 0 );
     ok( ret == S_OK, "BluetoothGATTGetCharacteristics failed: %#lx\n", ret );
 
     for (i = 0; i < actual; i++)
         trace( "characteristic %u: %s\n", i, debugstr_BTH_LE_GATT_CHARACTERISTIC( &buf[i] ) );
 
+    if (service)
+        test_service_BluetoothGATTGetCharacteristics( buf, actual, service );
+    else
+        skip( "Could not obtain handle to GATT service.\n" );
     free( buf );
 }
 
-static void test_device_BluetoothGATTGetServices( HANDLE device, void *param )
+static HANDLE get_gatt_service_iface( const WCHAR *device_addr_str, const GUID *service_uuid )
+{
+    char buffer[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + MAX_PATH * sizeof( WCHAR )];
+    SP_DEVICE_INTERFACE_DETAIL_DATA_W *iface_detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)buffer;
+    SP_DEVICE_INTERFACE_DATA iface_data;
+    HDEVINFO devinfo;
+    DWORD idx = 0, ret;
+    HANDLE device = INVALID_HANDLE_VALUE;
+
+    devinfo = SetupDiGetClassDevsW( &GUID_BLUETOOTH_GATT_SERVICE_DEVICE_INTERFACE, NULL, NULL,
+                                    DIGCF_DEVICEINTERFACE );
+    ret = GetLastError();
+    ok( devinfo != INVALID_HANDLE_VALUE, "SetupDiGetClassDevsW failed: %lu\n", ret );
+    if (devinfo == INVALID_HANDLE_VALUE)
+        return NULL;
+
+    iface_detail->cbSize = sizeof( *iface_detail );
+    iface_data.cbSize = sizeof( iface_data );
+    while (SetupDiEnumDeviceInterfaces( devinfo, NULL, &GUID_BLUETOOTH_GATT_SERVICE_DEVICE_INTERFACE, idx++,
+                                        &iface_data ))
+    {
+        SP_DEVINFO_DATA devinfo_data = {0};
+        WCHAR addr_str[13];
+        DEVPROPTYPE type;
+        BOOL success;
+        GUID uuid = {0};
+
+        devinfo_data.cbSize = sizeof( devinfo_data );
+        success = SetupDiGetDeviceInterfaceDetailW( devinfo, &iface_data, iface_detail, sizeof( buffer ), NULL,
+                                                    &devinfo_data );
+        addr_str[0] = 0;
+        success = SetupDiGetDevicePropertyW( devinfo, &devinfo_data, &DEVPKEY_Bluetooth_DeviceAddress, &type, (BYTE *)addr_str,
+                                             sizeof( addr_str ), NULL, 0 );
+        ok( success, "SetupDiGetDevicePropertyW failed: %lu\n", GetLastError() );
+        ok( type == DEVPROP_TYPE_STRING, "got type %#lx\n", type );
+        if (wcsicmp( addr_str, device_addr_str ))
+            continue;
+        success = SetupDiGetDevicePropertyW( devinfo, &devinfo_data, &DEVPKEY_Bluetooth_ServiceGUID, &type,
+                                             (BYTE *)&uuid, sizeof( uuid ), NULL, 0 );
+        ok( success, "SetupDiGetDevicePropertyW failed: %lu\n", GetLastError() );
+        ok( type == DEVPROP_TYPE_GUID, "got type %#lx\n", type );
+        if (!IsEqualGUID( &uuid, service_uuid ))
+            continue;
+        SetupDiDestroyDeviceInfoList( devinfo );
+        device = CreateFileW( iface_detail->DevicePath, GENERIC_READ ,
+                              FILE_SHARE_READ , NULL, OPEN_EXISTING, 0, NULL );
+        if (device != INVALID_HANDLE_VALUE)
+            return device;
+        else
+        {
+            DWORD err = GetLastError(); /* Returned by Windows for disconnected devices. */
+            ok( err == ERROR_GEN_FAILURE, "%lu != %d\n", err, ERROR_GEN_FAILURE );
+            return NULL;
+        }
+    }
+    SetupDiDestroyDeviceInfoList( devinfo );
+    ok( device != INVALID_HANDLE_VALUE, "Could not find device interface for GATT service %s\n",
+                  debugstr_guid( service_uuid ) );
+    return NULL;
+}
+
+static void test_device_BluetoothGATTGetServices( HANDLE device, const WCHAR *device_addr_str, void *param )
 {
     HRESULT ret;
     USHORT actual = 0, i;
@@ -173,9 +311,18 @@ static void test_device_BluetoothGATTGetServices( HANDLE device, void *param )
 
     for (i = 0; i < actual; i++)
     {
+        HANDLE service;
+        GUID uuid;
+
         winetest_push_context( "service %u", i );
         trace( "%s\n", debugstr_BTH_LE_GATT_SERVICE( &buf[i] ) );
-        test_service_BluetoothGATTGetCharacteristics( device, &buf[i] );
+
+        le_to_uuid( &buf[i].ServiceUuid, &uuid );
+        service = get_gatt_service_iface( device_addr_str, &uuid );
+        test_BluetoothGATTGetCharacteristics( device, service, &buf[i] );
+        if (service)
+            CloseHandle( service );
+
         winetest_pop_context();
     }
 
@@ -192,7 +339,7 @@ static void test_BluetoothGATTGetServices( void )
     test_for_all_le_devices( __LINE__, test_device_BluetoothGATTGetServices, NULL );
 }
 
-static void test_device_BluetoothGATTGetCharacteristics( HANDLE device, void *data )
+static void test_device_BluetoothGATTGetCharacteristics( HANDLE device, const WCHAR *addr, void *data )
 {
     HRESULT ret;
     USHORT actual = 0;
