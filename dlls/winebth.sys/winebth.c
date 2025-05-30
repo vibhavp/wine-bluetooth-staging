@@ -1446,6 +1446,66 @@ static void bluetooth_gatt_characteristic_remove( winebluetooth_gatt_characteris
     winebluetooth_gatt_characteristic_free( handle );
 }
 
+static void bluetooth_gatt_characteristic_value_update( struct winebluetooth_watcher_event_gatt_characteristic_value_changed event )
+{
+    struct bluetooth_radio *radio;
+
+    EnterCriticalSection( &device_list_cs );
+    LIST_FOR_EACH_ENTRY( radio, &device_list, struct bluetooth_radio, entry )
+    {
+        struct bluetooth_remote_device *device;
+
+        EnterCriticalSection( &radio->remote_devices_cs );
+        LIST_FOR_EACH_ENTRY( device, &radio->remote_devices, struct bluetooth_remote_device, entry )
+        {
+            struct bluetooth_gatt_service *svc;
+
+            EnterCriticalSection( &device->le_cs );
+            if (!device->le)
+            {
+                LeaveCriticalSection( &device->le_cs );
+                continue;
+            }
+            LIST_FOR_EACH_ENTRY( svc, &device->gatt_services, struct bluetooth_gatt_service, entry )
+            {
+                struct bluetooth_gatt_characteristic *chrc;
+                EnterCriticalSection( &svc->chars_cs );
+                LIST_FOR_EACH_ENTRY( chrc, &svc->characteristics, struct bluetooth_gatt_characteristic, entry )
+                {
+                    if (winebluetooth_gatt_characteristic_equal( chrc->characteristic, event.characteristic ))
+                    {
+                        if (!chrc->value || chrc->value->DataSize < event.value.size)
+                        {
+                            if (chrc->value)
+                                free( chrc->value );
+                            chrc->value = malloc( offsetof( BTH_LE_GATT_CHARACTERISTIC_VALUE, Data[event.value.size] ) );
+                            if (!chrc->value)
+                            {
+                                LeaveCriticalSection( &svc->chars_cs );
+                                LeaveCriticalSection( &device->le_cs );
+                                LeaveCriticalSection( &radio->remote_devices_cs );
+                                goto done;
+                            }
+                        }
+                        chrc->value->DataSize = event.value.size;
+                        winebluetooth_gatt_characteristic_value_move( &event.value, chrc->value->Data );
+                        LeaveCriticalSection( &svc->chars_cs );
+                        LeaveCriticalSection( &device->le_cs );
+                        LeaveCriticalSection( &radio->remote_devices_cs );
+                        goto done;
+                    }
+                }
+                LeaveCriticalSection( &svc->chars_cs );
+            }
+            LeaveCriticalSection( &device->le_cs );
+        }
+        LeaveCriticalSection( &radio->remote_devices_cs );
+    }
+done:
+    LeaveCriticalSection( &device_list_cs );
+    winebluetooth_gatt_characteristic_free( event.characteristic );
+}
+
 static DWORD CALLBACK bluetooth_event_loop_thread_proc( void *arg )
 {
     NTSTATUS status;
@@ -1496,6 +1556,9 @@ static DWORD CALLBACK bluetooth_event_loop_thread_proc( void *arg )
                         break;
                     case BLUETOOTH_WATCHER_EVENT_TYPE_GATT_CHARACTERISTIC_REMOVED:
                         bluetooth_gatt_characteristic_remove( event->event_data.gatt_characterisic_removed );
+                        break;
+                    case BLUETOOTH_WATCHER_EVENT_TYPE_GATT_CHARACTERISTIC_VALUE_CHANGED:
+                        bluetooth_gatt_characteristic_value_update( event->event_data.gatt_characteristic_value_changed );
                         break;
                     default:
                         FIXME( "Unknown bluetooth watcher event code: %#x\n", event->event_type );
