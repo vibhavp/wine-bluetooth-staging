@@ -208,6 +208,43 @@ void winebluetooth_gatt_characteristic_free( winebluetooth_gatt_characteristic_t
     UNIX_BLUETOOTH_CALL( bluetooth_gatt_characteristic_free, &args );
 }
 
+static const char *
+debugstr_winebluetooth_gatt_characteristic_value( const struct winebluetooth_gatt_characteristic_value *val )
+{
+    if (!val)
+        return wine_dbg_sprintf( "(null)" );
+    return wine_dbg_sprintf( "{ %lu { %p } }", val->size, (void *)val->handle );
+}
+
+void winebluetooth_gatt_characteristic_value_move( struct winebluetooth_gatt_characteristic_value *val, BYTE *dest )
+{
+    struct bluetooth_gatt_characteristic_value_move_params args = {0};
+
+    TRACE( "(%s, %p)\n", debugstr_winebluetooth_gatt_characteristic_value( val ), dest );
+
+    if (!winebluetooth_gatt_characteristic_value_is_inline( val ))
+    {
+        args.val = val;
+        args.buf = dest;
+        UNIX_BLUETOOTH_CALL( bluetooth_gatt_characteristic_value_move, &args );
+    }
+    else if (val->size)
+        memcpy( dest, val->buf, val->size );
+}
+
+void winebluetooth_gatt_characteristic_value_free( struct winebluetooth_gatt_characteristic_value *val )
+{
+    struct bluetooth_gatt_characteristic_value_free_params args = {0};
+
+    TRACE( "(%s)\n", debugstr_winebluetooth_gatt_characteristic_value( val ) );
+
+    if (!winebluetooth_gatt_characteristic_value_is_inline( val ))
+    {
+        args.val = val;
+        UNIX_BLUETOOTH_CALL( bluetooth_gatt_characteristic_value_free, &args );
+    }
+}
+
 NTSTATUS winebluetooth_get_event( struct winebluetooth_event *result )
 {
     struct bluetooth_get_event_params params = {0};
