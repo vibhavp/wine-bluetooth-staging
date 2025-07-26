@@ -32,7 +32,9 @@
 #define WIDL_using_Windows_Networking
 #include "windows.networking.connectivity.h"
 #include "windows.networking.h"
+#define WIDL_using_Windows_Devices_Bluetooth_Advertisement
 #define WIDL_using_Windows_Devices_Bluetooth
+#include "windows.devices.bluetooth.advertisement.h"
 #include "windows.devices.bluetooth.rfcomm.h"
 #include "windows.devices.bluetooth.h"
 
@@ -337,6 +339,102 @@ static void test_BluetoothLEDeviceStatics( void )
     IBluetoothLEDeviceStatics_Release( statics );
 }
 
+static void test_BluetoothLEAdvertisementFilter( void )
+{
+    static const WCHAR *class_name = RuntimeClass_Windows_Devices_Bluetooth_Advertisement_BluetoothLEAdvertisementFilter;
+    IVector_BluetoothLEAdvertisementBytePattern *patterns;
+    IBluetoothLEAdvertisementFilter *filter;
+    IBluetoothLEAdvertisement *adv;
+    IInspectable *inspectable;
+    HSTRING str;
+    HRESULT hr;
+    UINT32 len;
+
+    WindowsCreateString( class_name, wcslen( class_name ), &str );
+    hr = RoActivateInstance( str, &inspectable );
+    WindowsDeleteString( str );
+    todo_wine ok( hr == S_OK || broken( hr == REGDB_E_CLASSNOTREG ), "got hr %#lx.\n", hr );
+    if (hr == REGDB_E_CLASSNOTREG || hr == CLASS_E_CLASSNOTAVAILABLE)
+    {
+        todo_wine win_skip( "%s runtimeclass not registered, skipping tests.\n", wine_dbgstr_w( class_name ) );
+        return;
+    }
+
+    check_interface( inspectable, &IID_IUnknown );
+    check_interface( inspectable, &IID_IInspectable );
+    check_interface( inspectable, &IID_IAgileObject );
+
+    hr = IInspectable_QueryInterface( inspectable, &IID_IBluetoothLEAdvertisementFilter, (void **)&filter );
+    IInspectable_Release( inspectable );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+
+    hr = IBluetoothLEAdvertisementFilter_get_Advertisement( filter, &adv );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    ok( !!adv, "got adv %p\n", adv );
+    if (SUCCEEDED( hr ))
+    {
+        IVector_BluetoothLEAdvertisementDataSection *sections;
+        IReference_BluetoothLEAdvertisementFlags *flags;
+        IVector_BluetoothLEManufacturerData *mfgs;
+        IVector_GUID *guids;
+
+        check_interface( adv, &IID_IAgileObject );
+
+        /* Advertisement should be empty */
+        flags = (IReference_BluetoothLEAdvertisementFlags *)0xdeadbeef;
+        hr = IBluetoothLEAdvertisement_get_Flags( adv, &flags );
+        todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+        todo_wine ok( !flags, "got flags %p.\n", flags );
+        str = NULL;
+        hr = IBluetoothLEAdvertisement_get_LocalName( adv, &str );
+        todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+        todo_wine ok( WindowsIsStringEmpty( str ), "got str %s.\n", debugstr_hstring( str ) );
+
+        hr = IBluetoothLEAdvertisement_get_ServiceUuids( adv, &guids );
+        todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+        len = 0xdeadbeef;
+        hr = IVector_GUID_get_Size( guids, &len );
+        IVector_GUID_Release( guids );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        ok( !len, "got len %u.\n", len );
+
+        hr = IBluetoothLEAdvertisement_get_ManufacturerData( adv, &mfgs );
+        todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+        len = 0xdeadbeef;
+        hr = IVector_BluetoothLEManufacturerData_get_Size( mfgs, &len );
+        IVector_BluetoothLEManufacturerData_Release( mfgs );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        ok( !len, "got len %u.\n", len );
+
+        hr = IBluetoothLEAdvertisement_get_DataSections( adv, &sections );
+        todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+        len = 0xdeadbeef;
+        hr = IVector_BluetoothLEAdvertisementDataSection_get_Size( sections, &len );
+        IVector_BluetoothLEAdvertisementDataSection_Release( sections );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        ok( !len, "got len %u.\n", len );
+
+        hr = IBluetoothLEAdvertisementFilter_put_Advertisement( filter, adv );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        IBluetoothLEAdvertisement_Release( adv );
+    }
+
+    hr = IBluetoothLEAdvertisementFilter_get_BytePatterns( filter, &patterns );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    if (SUCCEEDED( hr ))
+    {
+        check_interface( patterns, &IID_IAgileObject );
+        check_interface( patterns, &IID_IIterable_BluetoothLEAdvertisementBytePattern );
+        len = 0xdeadbeef;
+        hr = IVector_BluetoothLEAdvertisementBytePattern_get_Size( patterns, &len );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        ok( !len, "got len %u.\n", len );
+        IVector_BluetoothLEAdvertisementBytePattern_Release( patterns );
+    }
+
+    IBluetoothLEAdvertisementFilter_Release( filter );
+}
+
 START_TEST(bluetooth)
 {
     HRESULT hr;
@@ -347,6 +445,7 @@ START_TEST(bluetooth)
     test_BluetoothAdapterStatics();
     test_BluetoothDeviceStatics();
     test_BluetoothLEDeviceStatics();
+    test_BluetoothLEAdvertisementFilter();
 
     RoUninitialize();
 }
