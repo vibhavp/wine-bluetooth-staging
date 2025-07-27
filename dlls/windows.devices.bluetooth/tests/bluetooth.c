@@ -29,6 +29,8 @@
 #define WIDL_using_Windows_Foundation
 #define WIDL_using_Windows_Foundation_Collections
 #include "windows.foundation.h"
+#define WIDL_using_Windows_Storage_Streams
+#include "windows.storage.streams.h"
 #define WIDL_using_Windows_Networking
 #include "windows.networking.connectivity.h"
 #include "windows.networking.h"
@@ -435,6 +437,76 @@ static void test_BluetoothLEAdvertisementFilter( void )
     IBluetoothLEAdvertisementFilter_Release( filter );
 }
 
+static void test_BluetoothLEAdvertisementBytePattern( void )
+{
+    static const WCHAR *class_name = RuntimeClass_Windows_Devices_Bluetooth_Advertisement_BluetoothLEAdvertisementBytePattern;
+    IBluetoothLEAdvertisementBytePattern *pattern;
+    IInspectable *inspectable;
+    INT16 int16 = 0;
+    IBuffer *data;
+    BYTE byte = 0;
+    HSTRING str;
+    HRESULT hr;
+
+    WindowsCreateString( class_name, wcslen( class_name ), &str );
+    hr = RoActivateInstance( str, &inspectable );
+    WindowsDeleteString( str );
+    todo_wine ok( hr == S_OK || broken( hr == REGDB_E_CLASSNOTREG ), "got hr %#lx.\n", hr );
+    if (hr == REGDB_E_CLASSNOTREG || hr == CLASS_E_CLASSNOTAVAILABLE)
+    {
+        todo_wine win_skip( "%s runtimeclass not registered, skipping tests.\n", wine_dbgstr_w( class_name ) );
+        return;
+    }
+
+    check_interface( inspectable, &IID_IUnknown );
+    check_interface( inspectable, &IID_IInspectable );
+    check_interface( inspectable, &IID_IAgileObject );
+
+    hr = IInspectable_QueryInterface( inspectable, &IID_IBluetoothLEAdvertisementBytePattern, (void **)&pattern );
+    IInspectable_Release( inspectable );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+
+    byte = 0xff;
+    hr = IBluetoothLEAdvertisementBytePattern_get_DataType( pattern, &byte );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( !byte, "got byte %#x\n", byte );
+    hr = IBluetoothLEAdvertisementBytePattern_put_DataType( pattern, 0xff );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    byte = 0;
+    hr = IBluetoothLEAdvertisementBytePattern_get_DataType( pattern, &byte );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( byte == 0xff, "got byte %#x\n", byte );
+
+    int16 = 0xffff;
+    hr = IBluetoothLEAdvertisementBytePattern_get_Offset( pattern, &int16 );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( !int16, "got int16 %#x\n", int16 );
+    hr = IBluetoothLEAdvertisementBytePattern_put_Offset( pattern, 0xffff );
+    todo_wine ok( hr == E_INVALIDARG, "got hr %#lx.\n", hr );
+    hr = IBluetoothLEAdvertisementBytePattern_put_Offset( pattern, 254 ); /* Maximum offset is 253 */
+    todo_wine ok( hr == E_INVALIDARG, "got hr %#lx.\n", hr );
+    hr = IBluetoothLEAdvertisementBytePattern_put_Offset( pattern, -1 );
+    todo_wine ok( hr == E_INVALIDARG, "got hr %#lx.\n", hr );
+    hr = IBluetoothLEAdvertisementBytePattern_put_Offset( pattern, 253 );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    hr = IBluetoothLEAdvertisementBytePattern_get_Offset( pattern, &int16 );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( int16 == 253, "got int16 %#x\n", int16 );
+
+    data = NULL;
+    hr = IBluetoothLEAdvertisementBytePattern_get_Data( pattern, &data );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( !!data, "got data %p\n", data );
+    if (data)
+    {
+        check_interface( data, &IID_IAgileObject );
+        hr = IBluetoothLEAdvertisementBytePattern_put_Data( pattern, data );
+        todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+        IBuffer_Release( data );
+    }
+    IBluetoothLEAdvertisementBytePattern_Release( pattern );
+}
+
 START_TEST(bluetooth)
 {
     HRESULT hr;
@@ -446,6 +518,7 @@ START_TEST(bluetooth)
     test_BluetoothDeviceStatics();
     test_BluetoothLEDeviceStatics();
     test_BluetoothLEAdvertisementFilter();
+    test_BluetoothLEAdvertisementBytePattern();
 
     RoUninitialize();
 }
