@@ -25,11 +25,12 @@
 #include "winstring.h"
 
 #include "roapi.h"
+#define WIDL_using_Windows_Storage_Streams
+#include "robuffer.h"
 
 #define WIDL_using_Windows_Foundation
 #define WIDL_using_Windows_Foundation_Collections
 #include "windows.foundation.h"
-#define WIDL_using_Windows_Storage_Streams
 #include "windows.storage.streams.h"
 #define WIDL_using_Windows_Networking
 #include "windows.networking.connectivity.h"
@@ -507,6 +508,139 @@ static void test_BluetoothLEAdvertisementBytePattern( void )
     IBluetoothLEAdvertisementBytePattern_Release( pattern );
 }
 
+static void test_BluetoothLEAdvertisementDataSection( void )
+{
+    static const WCHAR *class_name = RuntimeClass_Windows_Devices_Bluetooth_Advertisement_BluetoothLEAdvertisementDataSection;
+    IBluetoothLEAdvertisementDataSectionFactory *section_factory;
+    IBluetoothLEAdvertisementDataSection *section;
+    IBufferFactory *buffer_factory;
+    static const char exp_bytes[] = "Wine is not an emulator.";
+    IBufferByteAccess *byte_access;
+    IActivationFactory *factory;
+    IInspectable *inspectable;
+    IBuffer *data;
+    BYTE *bytes;
+    HSTRING str;
+    HRESULT hr;
+    UINT32 len;
+    BYTE type;
+
+    WindowsCreateString( class_name, wcslen( class_name ), &str );
+    hr = RoGetActivationFactory( str, &IID_IActivationFactory, (void **)&factory );
+    WindowsDeleteString( str );
+    todo_wine ok( hr == S_OK || broken( hr == REGDB_E_CLASSNOTREG ), "got hr %#lx.\n", hr );
+    if (hr == REGDB_E_CLASSNOTREG || hr == CLASS_E_CLASSNOTAVAILABLE)
+    {
+        todo_wine win_skip( "%s runtimeclass not registered, skipping tests.\n", wine_dbgstr_w( class_name ) );
+        return;
+    }
+
+    check_interface( factory, &IID_IAgileObject );
+    hr = IActivationFactory_ActivateInstance( factory, &inspectable );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+
+    check_interface( inspectable, &IID_IUnknown );
+    check_interface( inspectable, &IID_IInspectable );
+    check_interface( inspectable, &IID_IAgileObject );
+
+    hr = IInspectable_QueryInterface( inspectable, &IID_IBluetoothLEAdvertisementDataSection, (void **)&section );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+    IInspectable_Release( inspectable );
+
+    type = 0xff;
+    hr = IBluetoothLEAdvertisementDataSection_get_DataType( section, &type );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( !type, "got type %#x\n", type );
+    hr = IBluetoothLEAdvertisementDataSection_put_DataType( section, 0xff );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    type = 0;
+    hr = IBluetoothLEAdvertisementDataSection_get_DataType( section, &type );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( type == 0xff, "got type %#x\n", type );
+
+    data = NULL;
+    hr = IBluetoothLEAdvertisementDataSection_get_Data( section, &data );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( !!data, "got data %p\n", data );
+    if (SUCCEEDED( hr ))
+    {
+        check_interface( data, &IID_IAgileObject );
+        len = 0xdeadbeef;
+        hr = IBuffer_get_Length( data, &len );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        ok( !len, "got len %u\n", len );
+
+        hr = IBluetoothLEAdvertisementDataSection_put_Data( section, data );
+        todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+        IBuffer_Release( data );
+    }
+    IBluetoothLEAdvertisementDataSection_Release( section );
+
+    hr = IActivationFactory_QueryInterface( factory, &IID_IBluetoothLEAdvertisementDataSectionFactory, (void **)&section_factory );
+    IActivationFactory_Release( factory );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    if (FAILED( hr ))
+    {
+        skip( "Could not get IBluetoothLEAdvertisementDataSectionFactory.\n" );
+        return;
+    }
+
+    class_name = RuntimeClass_Windows_Storage_Streams_Buffer;
+    WindowsCreateString( class_name, wcslen( class_name ), &str );
+    hr = RoGetActivationFactory( str, &IID_IBufferFactory, (void **)&buffer_factory );
+    WindowsDeleteString( str );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+
+    hr = IBufferFactory_Create( buffer_factory, sizeof( exp_bytes ), &data );
+    IBufferFactory_Release( buffer_factory );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+
+    hr = IBuffer_put_Length( data, sizeof( exp_bytes ) );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+
+    hr = IBuffer_QueryInterface( data, &IID_IBufferByteAccess, (void **)&byte_access );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+    hr = IBufferByteAccess_Buffer( byte_access, &bytes );
+    ok( hr == S_OK, "got hr %#lx.\n", hr );
+    memcpy( bytes, exp_bytes, sizeof( exp_bytes ) );
+    IBufferByteAccess_Release( byte_access );
+
+    check_interface( section_factory, &IID_IAgileObject );
+    hr = IBluetoothLEAdvertisementDataSectionFactory_Create( section_factory, 0xff, data, &section );
+    IBuffer_Release( data );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    if (FAILED( hr ))
+    {
+        skip( "Could not create IBluetoothLEAdvertisementDataSection, skipping.\n" );
+        return;
+    }
+
+    type = 0;
+    hr = IBluetoothLEAdvertisementDataSection_get_DataType( section, &type );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    todo_wine ok( type == 0xff, "got type %#x\n.", type );
+
+    hr = IBluetoothLEAdvertisementDataSection_get_Data( section, &data );
+    todo_wine ok( hr == S_OK, "got hr %#lx.\n", hr );
+    if (SUCCEEDED( hr ))
+    {
+        hr = IBuffer_get_Length( data, &len );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        ok( len == sizeof( exp_bytes ), "got len %u.\n", len );
+
+        hr = IBuffer_QueryInterface( data, &IID_IBufferByteAccess, (void **)&byte_access );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        hr = IBufferByteAccess_Buffer( byte_access, &bytes );
+        ok( hr == S_OK, "got hr %#lx.\n", hr );
+        if (len == sizeof( exp_bytes ))
+            ok( !memcmp( bytes, exp_bytes, len ), "got bytes %s\n", debugstr_an( (const char *)bytes, len ) );
+        IBufferByteAccess_Release( byte_access );
+        IBuffer_Release( data );
+    }
+
+    IBluetoothLEAdvertisementDataSection_Release( section );
+}
+
 START_TEST(bluetooth)
 {
     HRESULT hr;
@@ -519,6 +653,7 @@ START_TEST(bluetooth)
     test_BluetoothLEDeviceStatics();
     test_BluetoothLEAdvertisementFilter();
     test_BluetoothLEAdvertisementBytePattern();
+    test_BluetoothLEAdvertisementDataSection();
 
     RoUninitialize();
 }
